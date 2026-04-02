@@ -18,6 +18,7 @@ import asyncio
 import json
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import dotenv
@@ -168,6 +169,7 @@ def embed_chunks(chunks: list[str], openai_client: OpenAI, batch_size: int = 64)
 
     Sends in batches of batch_size. Kept small (64) to stay under the
     300K token-per-request limit even with long Hebrew chunks.
+    Retries with exponential backoff on rate limit errors.
     """
     if not chunks:
         return []
@@ -175,11 +177,19 @@ def embed_chunks(chunks: list[str], openai_client: OpenAI, batch_size: int = 64)
     all_embeddings = []
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i : i + batch_size]
-        response = openai_client.embeddings.create(
-            model="text-embedding-3-small",
-            input=batch,
-        )
-        all_embeddings.extend(item.embedding for item in response.data)
+        for attempt in range(5):
+            try:
+                response = openai_client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=batch,
+                )
+                all_embeddings.extend(item.embedding for item in response.data)
+                break
+            except Exception as e:
+                if "429" in str(e) and attempt < 4:
+                    time.sleep(2 ** attempt)
+                else:
+                    raise
     return all_embeddings
 
 
@@ -227,6 +237,7 @@ async def run(
     dry_run: bool = False,
     from_date: str | None = None,
     to_date: str | None = None,
+    concurrency: int = 5,
 ):
     """Main ingestion pipeline."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -249,65 +260,85 @@ async def run(
     os_client = OpenSearch(hosts=[{"host": "localhost", "port": 9200}], use_ssl=False) if not dry_run else None
     total_indexed = 0
     total_errors = 0
+    processed = 0
+    lock = asyncio.Lock()
+    start_time = time.time()
 
-    for i, doc in enumerate(docs):
+    # Semaphore limits concurrent embedding API calls (the bottleneck).
+    # Too high risks rate limits; too low wastes I/O wait time.
+    sem = asyncio.Semaphore(concurrency)
+
+    async def process_one(i: int, doc: dict):
+        nonlocal total_indexed, total_errors, processed
+
         doc_id = doc["DocumentCommitteeSessionID"]
         session_id = doc["CommitteeSessionID"]
-        print(f"\n[{i+1}/{len(docs)}] Processing document {doc_id} (session {session_id})...")
 
-        # Download
-        local_path = await download_protocol(doc)
-        if not local_path:
-            continue
+        try:
+            async with sem:
+                # Download
+                local_path = await download_protocol(doc)
+                if not local_path:
+                    return
 
-        # Convert to text
-        text = doc_to_text(local_path)
-        if not text:
-            continue
-        print(f"  Extracted {len(text)} chars of text")
+                # Convert to text (CPU-bound but fast)
+                text = doc_to_text(local_path)
+                if not text:
+                    return
 
-        # Chunk
-        chunks = chunk_text(text)
-        print(f"  Split into {len(chunks)} chunks")
+                chunks = chunk_text(text)
 
-        if dry_run:
-            continue
+                if dry_run:
+                    return
 
-        # Embed
-        vectors = embed_chunks(chunks, openai_client)
-        print(f"  Generated {len(vectors)} embeddings")
+                # Embed (API-bound — this is the bottleneck we're parallelizing)
+                vectors = embed_chunks(chunks, openai_client)
 
-        # Get session metadata for context
-        session = await fetch_session_metadata(session_id)
+                # Get session metadata
+                session = await fetch_session_metadata(session_id)
 
-        # Build and index records immediately (don't accumulate in memory)
-        committee_id = session.get("CommitteeID")
-        committee_name = committee_names.get(committee_id, "")
-        actions = []
-        for j, (chunk, vector) in enumerate(zip(chunks, vectors)):
-            actions.append({
-                "_index": "knesset-protocols",
-                "_id": f"{doc_id}_{j}",
-                "_source": {
-                    "doc_id": doc_id,
-                    "session_id": session_id,
-                    "committee_id": committee_id,
-                    "committee_name": committee_name,
-                    "knesset_num": knesset_num,
-                    "session_date": session.get("StartDate"),
-                    "chunk_index": j,
-                    "text": chunk,
-                    "embedding": vector,
-                    "source_url": doc["FilePath"],
-                },
-            })
+                # Build and index
+                committee_id = session.get("CommitteeID")
+                committee_name = committee_names.get(committee_id, "")
+                actions = []
+                for j, (chunk, vector) in enumerate(zip(chunks, vectors)):
+                    actions.append({
+                        "_index": "knesset-protocols",
+                        "_id": f"{doc_id}_{j}",
+                        "_source": {
+                            "doc_id": doc_id,
+                            "session_id": session_id,
+                            "committee_id": committee_id,
+                            "committee_name": committee_name,
+                            "knesset_num": knesset_num,
+                            "session_date": session.get("StartDate"),
+                            "chunk_index": j,
+                            "text": chunk,
+                            "embedding": vector,
+                            "source_url": doc["FilePath"],
+                        },
+                    })
 
-        success, errors = bulk(os_client, actions)
-        total_indexed += success
-        total_errors += len(errors)
-        print(f"  Indexed {success} chunks (running total: {total_indexed})")
+                success, errors = bulk(os_client, actions)
 
-    print(f"\nDone. Total indexed: {total_indexed} chunks ({total_errors} errors)")
+            async with lock:
+                total_indexed += success
+                total_errors += len(errors)
+                processed += 1
+                elapsed = time.time() - start_time
+                rate = processed / elapsed if elapsed > 0 else 0
+                print(f"  [{processed}/{len(docs)}] doc {doc_id}: {success} chunks indexed ({rate:.1f} docs/sec)")
+
+        except Exception as e:
+            async with lock:
+                processed += 1
+                print(f"  [{processed}/{len(docs)}] doc {doc_id}: FAILED — {e}")
+
+    tasks = [process_one(i, doc) for i, doc in enumerate(docs)]
+    await asyncio.gather(*tasks)
+
+    elapsed = time.time() - start_time
+    print(f"\nDone. {total_indexed} chunks indexed ({total_errors} errors) in {elapsed:.0f}s")
 
 
 def main():
@@ -317,9 +348,10 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Download and chunk only, skip embedding")
     parser.add_argument("--from-date", type=str, default=None, help="Start date filter (ISO, e.g. 2024-01-01)")
     parser.add_argument("--to-date", type=str, default=None, help="End date filter (ISO, e.g. 2024-12-31)")
+    parser.add_argument("--concurrency", type=int, default=5, help="Parallel protocol processing (default: 5)")
     args = parser.parse_args()
 
-    asyncio.run(run(args.knesset_num, args.limit, args.dry_run, args.from_date, args.to_date))
+    asyncio.run(run(args.knesset_num, args.limit, args.dry_run, args.from_date, args.to_date, args.concurrency))
 
 
 if __name__ == "__main__":

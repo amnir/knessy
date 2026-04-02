@@ -147,4 +147,42 @@ BENCHMARK_CASES = [
         "negative": [],
         "tags": ["retrieval", "english-query"],
     },
+    {
+        "id": "special_communications_committee",
+        "question": "כיצד הוקמה הוועדה המיוחדת לתקשורת בכנסת ה-25? מדוע לא דנה ועדת הכלכלה בחוק? מה היו הטענות בעד ונגד?",
+        "expected": [
+            {
+                "text": "ביטן",
+                "weight": 3,
+                "description": "Mentions Economics Committee chair David Bitan",
+            },
+            {
+                "text": "ועדה מיוחדת",
+                "weight": 3,
+                "description": "References the special committee",
+            },
+            {
+                "text": "ועדת הכלכלה",
+                "weight": 2,
+                "description": "Identifies Economics Committee as the bypassed committee",
+            },
+            {
+                "text": "קרעי",
+                "weight": 2,
+                "description": "Connects to Minister Karhi",
+            },
+            {
+                "text": "Session",
+                "weight": 2,
+                "description": "Cites at least one specific session",
+            },
+            {
+                "text": "2025",
+                "weight": 1,
+                "description": "Correct timeframe (early 2025)",
+            },
+        ],
+        "negative": [],
+        "tags": ["synthesis", "cross-committee", "committee-bypass"],
+    },
 ]
