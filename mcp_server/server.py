@@ -117,7 +117,41 @@ async def get_bill_votes(bill_id: int) -> str:
 
 
 @mcp.tool()
-async def search_protocols(query: str, top: int = 5) -> str:
+async def list_committees(knesset_num: int | None = None, top: int = 50) -> str:
+    """List Knesset committees with their IDs.
+
+    Use this to find committee IDs for filtering protocol searches.
+
+    Args:
+        knesset_num: Filter by Knesset number (e.g. 25 for current).
+        top: Maximum results (default 50).
+
+    Returns:
+        List of committees with ID, name, and category.
+    """
+    committees = await knesset_client.list_committees(knesset_num=knesset_num, top=top)
+
+    if not committees:
+        return "No committees found."
+
+    results = []
+    for c in committees:
+        results.append(
+            f"- **{c['CommitteeID']}**: {c.get('Name', 'N/A')} "
+            f"({c.get('CategoryDesc', 'N/A')})"
+        )
+
+    return f"Found {len(committees)} committees:\n\n" + "\n".join(results)
+
+
+@mcp.tool()
+async def search_protocols(
+    query: str,
+    top: int = 5,
+    committee_id: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> str:
     """Search Knesset committee protocol transcripts using hybrid search.
 
     Combines semantic (vector) search with keyword (BM25) search for best results.
@@ -127,6 +161,9 @@ async def search_protocols(query: str, top: int = 5) -> str:
         query: What to search for (Hebrew or English). Can be a topic, person name,
                or specific question about committee discussions.
         top: Maximum number of results to return (default 5).
+        committee_id: Filter by committee ID (use list_committees to find IDs).
+        from_date: Start date filter (ISO format, e.g. '2024-01-01').
+        to_date: End date filter (ISO format, e.g. '2024-12-31').
 
     Returns:
         Relevant excerpts from committee protocol transcripts with source info.
@@ -137,33 +174,48 @@ async def search_protocols(query: str, top: int = 5) -> str:
     )
     query_vector = embedding_resp.data[0].embedding
 
+    # Build filter clauses for metadata narrowing
+    filter_clauses = []
+    if committee_id is not None:
+        filter_clauses.append({"term": {"committee_id": committee_id}})
+    if from_date:
+        filter_clauses.append({"range": {"session_date": {"gte": from_date}}})
+    if to_date:
+        filter_clauses.append({"range": {"session_date": {"lte": to_date}}})
+
+    bool_query = {
+        "should": [
+            {
+                "knn": {
+                    "embedding": {
+                        "vector": query_vector,
+                        "k": top * 2,
+                    },
+                },
+            },
+            {
+                "match": {
+                    "text": {
+                        "query": query,
+                        "boost": 0.3,
+                    },
+                },
+            },
+        ],
+    }
+    if filter_clauses:
+        bool_query["filter"] = filter_clauses
+        bool_query["minimum_should_match"] = 1
+
     result = os_client.search(
         index="knesset-protocols",
         body={
-            "query": {
-                "bool": {
-                    "should": [
-                        {
-                            "knn": {
-                                "embedding": {
-                                    "vector": query_vector,
-                                    "k": top * 2,
-                                },
-                            },
-                        },
-                        {
-                            "match": {
-                                "text": {
-                                    "query": query,
-                                    "boost": 0.3,
-                                },
-                            },
-                        },
-                    ],
-                },
-            },
+            "query": {"bool": bool_query},
             "size": top,
-            "_source": ["text", "session_id", "session_date", "source_url", "chunk_index"],
+            "_source": [
+                "text", "session_id", "session_date", "source_url",
+                "chunk_index", "committee_id", "committee_name",
+            ],
         },
     )
 
@@ -177,10 +229,11 @@ async def search_protocols(query: str, top: int = 5) -> str:
         date = src.get("session_date", "Unknown date")
         if date and "T" in str(date):
             date = str(date).split("T")[0]
+        committee = src.get("committee_name", "")
 
         results.append(
             f"### Result {i+1} (relevance: {hit['_score']:.2f})\n"
-            f"**Session {src['session_id']}** | Date: {date}\n"
+            f"**Session {src['session_id']}** | Committee: {committee} | Date: {date}\n"
             f"Source: {src.get('source_url', 'N/A')}\n\n"
             f"{src['text']}"
         )

@@ -31,5 +31,6 @@ class AgentState(TypedDict):
     research_tasks: list[ResearchTask]
     research_results: list[ResearchResult]
     is_sufficient: bool
+    eval_feedback: str
     iteration: int
     final_answer: str

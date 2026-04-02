@@ -21,3 +21,6 @@ opensearch-data/
 
 # Downloaded protocol files (cached, re-downloadable)
 data/
+
+# Personal notes
+LEARNINGS.md

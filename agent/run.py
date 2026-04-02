@@ -25,6 +25,7 @@ async def run(question: str):
         "research_tasks": [],
         "research_results": [],
         "is_sufficient": False,
+        "eval_feedback": "",
         "iteration": 0,
         "final_answer": "",
     }

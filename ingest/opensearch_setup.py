@@ -36,6 +36,7 @@ INDEX_MAPPING = {
             "doc_id": {"type": "keyword"},
             "session_id": {"type": "integer"},
             "committee_id": {"type": "integer"},
+            "committee_name": {"type": "keyword"},
             "knesset_num": {"type": "integer"},
             "session_date": {"type": "date"},
             "chunk_index": {"type": "integer"},

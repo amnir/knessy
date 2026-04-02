@@ -26,6 +26,7 @@ TOOL_REGISTRY = {
     "get_bill": knesset_client.get_bill,
     "get_bill_votes": knesset_client.get_bill_votes,
     "get_vote_results": knesset_client.get_vote_results,
+    "list_committees": knesset_client.list_committees,
 }
 
 
@@ -47,36 +48,46 @@ def planner(state: AgentState) -> dict:
     question = state["question"]
     iteration = state.get("iteration", 0)
 
-    # On subsequent iterations, include what we already know
+    # On subsequent iterations, include what we already know and evaluator feedback
     prior_context = ""
     if state.get("research_results"):
-        prior_context = "\n\nPrevious research results:\n"
+        prior_context = "\n\nPrevious queries (DO NOT repeat these):\n"
         for r in state["research_results"]:
-            prior_context += f"\n- Tool: {r.task.tool}({r.task.args})\n  Result: {r.result[:500]}...\n"
-        prior_context += "\nThe evaluator determined this is not yet sufficient. Plan additional research to fill the gaps."
+            prior_context += f"- {r.task.tool}({r.task.args}) → {r.result[:200]}...\n"
+
+        eval_feedback = state.get("eval_feedback", "")
+        if eval_feedback:
+            prior_context += f"\nEvaluator feedback — what's missing:\n{eval_feedback}\n"
+        prior_context += "\nPlan NEW queries with DIFFERENT search terms to fill the gaps above."
 
     system_prompt = """You are a research planner for an Israeli Knesset (parliament) data assistant.
-Your job is to decide which data sources to query to answer the user's question.
+Your job is to plan which tools to call to answer the user's question.
 
 Available tools:
-- search_bills: Search bills by name (query: str) and/or Knesset number (knesset_num: int, top: int)
-- get_bill: Get a specific bill by ID (bill_id: int)
+- search_protocols: Search committee protocol transcripts (hybrid semantic + keyword).
+    query (str): Hebrew keywords or phrases to search for
+    top (int): max results (default 5, use 10 for broad questions)
+    committee_id (int | None): filter by committee ID (from list_committees)
+    from_date (str | None): ISO date, e.g. '2024-01-01'
+    to_date (str | None): ISO date, e.g. '2024-12-31'
+- search_bills: Search bills by name (query: str, knesset_num: int | None, top: int)
+- get_bill: Get bill details by ID (bill_id: int)
 - get_bill_votes: Get votes for a bill (bill_id: int)
-- get_vote_results: Get individual MK votes for a vote (vote_id: int)
-- search_protocols: Search committee protocol transcripts (query: str, top: int)
+- get_vote_results: Get individual MK votes (vote_id: int)
+- list_committees: List committees (knesset_num: int | None, top: int). Returns ID, name, category.
 
-Respond with a JSON array of tasks. Each task has:
-- "tool": tool name
-- "args": dict of arguments
-- "reason": why this task is needed
+Search strategy (CRITICAL):
+1. All Knesset content is in Hebrew. ALWAYS search with Hebrew terms, even if the question is in English.
+2. Start with broad search_protocols queries (no committee filter) using varied Hebrew keywords. This is your primary tool.
+3. Use multiple DIFFERENT queries for the same topic — synonyms, related terms, names of key people.
+   Example for communications law: "חוק התקשורת קרעי", "רפורמה בשידורים", "ועדה מיוחדת תקשורת"
+4. Only use list_committees if you specifically need a committee_id to filter. Don't call it speculatively.
+5. On retry iterations: DO NOT repeat previous queries. Read the evaluator feedback and try DIFFERENT search terms, different date ranges, or different tools.
 
-Example:
-[
-  {"tool": "search_bills", "args": {"query": "חינוך", "knesset_num": 25}, "reason": "Find education-related bills in the 25th Knesset"},
-  {"tool": "search_protocols", "args": {"query": "רפורמה בחינוך"}, "reason": "Find committee discussions about education reform"}
-]
+Respond with a JSON array of tasks:
+[{"tool": "...", "args": {...}, "reason": "..."}]
 
-Respond ONLY with the JSON array, no other text."""
+Respond ONLY with the JSON array."""
 
     user_prompt = f"Question: {question}{prior_context}"
 
@@ -152,28 +163,30 @@ def evaluator(state: AgentState) -> dict:
             "messages": [{"role": "assistant", "content": f"Evaluation: max iterations ({MAX_ITERATIONS}) reached, proceeding to synthesis"}],
         }
 
+    # Deduplicate before summarizing
+    deduped = _deduplicate_results(results)
     results_summary = ""
-    for r in results:
-        results_summary += f"\n- Tool: {r.task.tool} | Reason: {r.task.reason}\n  Result preview: {r.result[:300]}...\n"
+    for r in deduped:
+        results_summary += f"\n- Tool: {r.task.tool}({r.task.args})\n  Result preview: {r.result[:500]}...\n"
 
     system_prompt = """You are an evaluator for a Knesset research agent.
-Given the user's question and the research results gathered so far,
-decide if there is enough information to provide a good answer.
+Given the user's question and the research gathered so far, decide: is there enough to answer?
 
-IMPORTANT: Err on the side of "sufficient". If the results contain relevant
-information that directly addresses the question, mark as sufficient.
-Only request more research if there are CLEAR, SPECIFIC gaps — for example:
-- A bill was mentioned by name but we don't have its details or vote results
-- The question asks about multiple topics but results only cover one
-- Results returned errors or empty data for a critical query
+Rules:
+1. If the results contain relevant information that addresses the question, mark SUFFICIENT.
+2. Mark INSUFFICIENT only if there is a specific, named gap — e.g. "found the bill but no vote data", "found committee A but not committee B which was also mentioned."
+3. NEVER request more research just for "more results" or "more detail" on the same topic.
+4. If the same query was already tried and returned results, those results are final — do not retry.
 
-Do NOT request more research just to get "more" of the same type of data.
-Repeating the same search with a higher limit is not useful.
+When marking insufficient, you MUST provide concrete guidance for the next search:
+- What specific Hebrew search terms to try
+- What specific committee or date range to target
+- What specific bill ID or vote to look up
 
-Respond with a JSON object:
-{"sufficient": true/false, "reason": "explanation"}
+Respond with JSON:
+{"sufficient": true/false, "reason": "explanation", "guidance": "specific next steps if insufficient, empty string if sufficient"}
 
-Respond ONLY with the JSON object, no other text."""
+Respond ONLY with the JSON object."""
 
     user_prompt = f"Question: {question}\n\nResearch results so far (iteration {iteration}):\n{results_summary}"
 
@@ -188,27 +201,53 @@ Respond ONLY with the JSON object, no other text."""
 
     return {
         "is_sufficient": is_sufficient,
+        "eval_feedback": verdict.get("guidance", ""),
         "messages": [{"role": "assistant", "content": f"Evaluation: {'sufficient' if is_sufficient else 'need more research'} — {verdict.get('reason', '')}"}],
     }
+
+
+def _deduplicate_results(results: list[ResearchResult]) -> list[ResearchResult]:
+    """Remove duplicate results (same tool + same args)."""
+    seen = set()
+    deduped = []
+    for r in results:
+        key = f"{r.task.tool}:{json.dumps(r.task.args, sort_keys=True)}"
+        if key not in seen:
+            seen.add(key)
+            deduped.append(r)
+    return deduped
+
+
+def _truncate_results(results: list[ResearchResult], max_chars: int = 20000) -> str:
+    """Build results text, truncating to stay within token limits."""
+    results_text = ""
+    for r in results:
+        entry = f"\n--- {r.task.tool}({r.task.args}) ---\n{r.result}\n"
+        if len(results_text) + len(entry) > max_chars:
+            # Truncate this entry to fit
+            remaining = max_chars - len(results_text)
+            if remaining > 200:
+                results_text += entry[:remaining] + "\n[truncated]\n"
+            break
+        results_text += entry
+    return results_text
 
 
 def synthesizer(state: AgentState) -> dict:
     """Produce a final grounded answer with sources."""
     question = state["question"]
-    results = state.get("research_results", [])
+    results = _deduplicate_results(state.get("research_results", []))
+    results_text = _truncate_results(results)
 
-    results_text = ""
-    for r in results:
-        results_text += f"\n--- Source: {r.task.tool}({r.task.args}) ---\n{r.result}\n"
-
-    system_prompt = """You are a Knesset research assistant providing answers to Israeli citizens.
+    system_prompt = """You are a Knesset research assistant. Analyze the research data and answer the question.
 
 Rules:
-1. Answer based ONLY on the research results provided — do not make up information
-2. Cite your sources: reference specific bills, votes, committee sessions, or protocol excerpts
-3. If the data is insufficient, say what you found and what's missing
-4. Answer in the same language as the question (Hebrew or English)
-5. Be concise but thorough"""
+1. Base your answer ONLY on the provided research data. Do not invent information.
+2. Quote directly from committee protocols when possible — exact Hebrew quotes in quotation marks are highly valuable.
+3. Cite sources: include session IDs, committee names, and dates.
+4. If the data partially answers the question, present what you found and note what's missing.
+5. Answer in the same language as the question.
+6. Structure long answers with headers for readability."""
 
     user_prompt = f"Question: {question}\n\nResearch data:\n{results_text}"
 

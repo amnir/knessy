@@ -82,6 +82,28 @@ async def get_vote_results(vote_id: int) -> list[dict]:
     return data.get("value", [])
 
 
+async def list_committees(knesset_num: int | None = None, top: int = 50) -> list[dict]:
+    """List Knesset committees, optionally filtered by Knesset number.
+
+    Returns committee ID, name, and type for use in protocol filtering.
+    """
+    params = {
+        "$format": "json",
+        "$top": str(top),
+        "$select": "CommitteeID,Name,CategoryDesc,KnessetNum",
+        "$orderby": "Name",
+    }
+    if knesset_num:
+        params["$filter"] = f"KnessetNum eq {knesset_num}"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(f"{PARLIAMENT_URL}/KNS_Committee", params=params)
+        resp.raise_for_status()
+
+    data = resp.json()
+    return data.get("value", [])
+
+
 async def get_bill_votes(bill_id: int) -> list[dict]:
     """Get vote headers (summaries) related to a bill.
 
