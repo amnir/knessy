@@ -1,0 +1,19 @@
+# Pinned to versions released before Feb 2026 (supply chain safety)
+
+# MCP server
+mcp==1.26.0
+
+# Agent framework
+langgraph==1.0.7
+
+# LLM + Embeddings (OpenAI for both)
+openai==2.16.0
+
+# Vector + full-text search (OpenSearch client)
+opensearch-py==3.1.0
+
+# Environment
+python-dotenv==1.2.1
+
+# HTTP (for Knesset OData calls)
+httpx==0.28.1
