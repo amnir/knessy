@@ -5,6 +5,9 @@ Run with:  python -m mcp_server.server
 Or configure in Claude Desktop's claude_desktop_config.json.
 """
 
+import json
+import os
+
 import dotenv
 dotenv.load_dotenv()
 
@@ -16,6 +19,140 @@ from mcp_server import knesset_client
 
 openai_client = OpenAI()
 os_client = OpenSearch(hosts=[{"host": "localhost", "port": 9200}], use_ssl=False)
+
+RERANKER_MODEL = "gpt-4o-mini"
+
+# Feature flags — set via environment variables
+ENABLE_HYDE = os.getenv("KNESSY_HYDE", "1") == "1"
+ENABLE_RERANK = os.getenv("KNESSY_RERANK", "1") == "1"
+
+
+def _analyze_query(query: str) -> dict:
+    """Extract structured search constraints from a natural language query.
+
+    Returns date range, committee hints, and optimized Hebrew search terms.
+    This pre-filters the corpus before semantic search, which is critical
+    for precision at scale.
+    """
+    response = openai_client.chat.completions.create(
+        model=RERANKER_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You extract search constraints from questions about the Israeli Knesset. "
+                    "Return a JSON object with:\n"
+                    '- "from_date": ISO date string or null (e.g. "2024-01-01")\n'
+                    '- "to_date": ISO date string or null\n'
+                    '- "committee_hint": Hebrew committee name substring or null (e.g. "כלכלה", "חוקה")\n'
+                    '- "search_terms": array of 2-3 Hebrew keyword phrases for protocol search\n\n'
+                    "Rules:\n"
+                    "- Extract dates from context: '2024' → from_date 2024-01-01, to_date 2024-12-31\n"
+                    "- If a specific Knesset number is mentioned (e.g. Knesset 25), use 2022-11-15 as start\n"
+                    "- Always generate Hebrew search terms, even for English questions\n"
+                    "- Include person names, bill names, and topic keywords as separate terms\n"
+                    "- committee_hint: ONLY set this if the question explicitly asks about a specific "
+                    "committee (e.g. 'what did the Economics Committee discuss'). "
+                    "Do NOT set it for questions about a topic, person, or bill — those may be "
+                    "discussed across multiple committees.\n"
+                    "Respond ONLY with the JSON object."
+                ),
+            },
+            {"role": "user", "content": query},
+        ],
+        temperature=0,
+    )
+    raw = response.choices[0].message.content.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"from_date": None, "to_date": None, "committee_hint": None, "search_terms": [query]}
+
+
+async def _resolve_committee_id(hint: str) -> int | None:
+    """Resolve a Hebrew committee name hint to a committee ID."""
+    if not hint:
+        return None
+    committees = await knesset_client.list_committees(knesset_num=25, top=100)
+    for c in committees:
+        if hint in c.get("Name", ""):
+            return c["CommitteeID"]
+    return None
+
+
+def _hyde_expand(query: str) -> str:
+    """Generate a hypothetical document that would answer the query (HyDE).
+
+    The hypothetical answer is closer in embedding space to real matching
+    documents than the raw question is.
+    """
+    response = openai_client.chat.completions.create(
+        model=RERANKER_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a Knesset committee protocol writer. "
+                    "Given a question, write a short paragraph (in Hebrew) that "
+                    "would appear in a committee protocol transcript if this topic "
+                    "was discussed. Include realistic speaker names and committee language."
+                ),
+            },
+            {"role": "user", "content": query},
+        ],
+        temperature=0.7,
+        max_tokens=200,
+    )
+    return response.choices[0].message.content
+
+
+def _rerank(query: str, hits: list[dict], top: int) -> list[dict]:
+    """Rerank search results using an LLM for relevance scoring.
+
+    Takes the initial retrieval candidates and scores each one against
+    the query. Returns the top N by relevance score.
+    """
+    if len(hits) <= top:
+        return hits
+
+    # Build candidates for scoring
+    candidates = []
+    for i, hit in enumerate(hits):
+        text = hit["_source"]["text"][:500]
+        candidates.append(f"[{i}] {text}")
+
+    response = openai_client.chat.completions.create(
+        model=RERANKER_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a relevance judge. Given a query and numbered text passages, "
+                    "return a JSON array of the passage numbers most relevant to the query, "
+                    "ordered by relevance (most relevant first). "
+                    f"Return at most {top} numbers.\n"
+                    "Respond ONLY with a JSON array of integers, e.g. [3, 0, 7]"
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Query: {query}\n\nPassages:\n" + "\n\n".join(candidates),
+            },
+        ],
+        temperature=0,
+    )
+
+    raw = response.choices[0].message.content.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+
+    try:
+        ranked_indices = json.loads(raw)
+        return [hits[i] for i in ranked_indices if i < len(hits)][:top]
+    except (json.JSONDecodeError, IndexError):
+        return hits[:top]
 
 mcp = FastMCP(
     "Knesset Helper",
@@ -168,11 +305,32 @@ async def search_protocols(
     Returns:
         Relevant excerpts from committee protocol transcripts with source info.
     """
-    embedding_resp = openai_client.embeddings.create(
-        model="text-embedding-3-small",
-        input=[query],
-    )
-    query_vector = embedding_resp.data[0].embedding
+    # Query analysis: extract structured constraints when caller didn't provide them
+    analysis = _analyze_query(query) if not (committee_id or from_date or to_date) else None
+    if analysis:
+        if not from_date and analysis.get("from_date"):
+            from_date = analysis["from_date"]
+        if not to_date and analysis.get("to_date"):
+            to_date = analysis["to_date"]
+        if not committee_id and analysis.get("committee_hint"):
+            committee_id = await _resolve_committee_id(analysis["committee_hint"])
+
+    # Embedding: optionally use HyDE for better semantic matching
+    if ENABLE_HYDE:
+        hyde_doc = _hyde_expand(query)
+        embedding_resp = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=[query, hyde_doc],
+        )
+        query_vector = embedding_resp.data[0].embedding
+        hyde_vector = embedding_resp.data[1].embedding
+        search_vector = [(a + b) / 2 for a, b in zip(query_vector, hyde_vector)]
+    else:
+        embedding_resp = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=[query],
+        )
+        search_vector = embedding_resp.data[0].embedding
 
     # Build filter clauses for metadata narrowing
     filter_clauses = []
@@ -183,13 +341,16 @@ async def search_protocols(
     if to_date:
         filter_clauses.append({"range": {"session_date": {"lte": to_date}}})
 
+    # Over-fetch candidates for reranking
+    fetch_size = top * 4 if ENABLE_RERANK else top
+
     bool_query = {
         "should": [
             {
                 "knn": {
                     "embedding": {
-                        "vector": query_vector,
-                        "k": top * 2,
+                        "vector": search_vector,
+                        "k": fetch_size,
                     },
                 },
             },
@@ -211,7 +372,7 @@ async def search_protocols(
         index="knesset-protocols",
         body={
             "query": {"bool": bool_query},
-            "size": top,
+            "size": fetch_size,
             "_source": [
                 "text", "session_id", "session_date", "source_url",
                 "chunk_index", "committee_id", "committee_name",
@@ -222,6 +383,10 @@ async def search_protocols(
     hits = result["hits"]["hits"]
     if not hits:
         return f"No committee protocol content found for: {query}"
+
+    # Rerank if enabled
+    if ENABLE_RERANK:
+        hits = _rerank(query, hits, top)
 
     results = []
     for i, hit in enumerate(hits):
