@@ -2,6 +2,9 @@
 
 An agentic research assistant for Israeli Knesset (parliament) data. Ask questions in Hebrew or English about bills, votes, and committee discussions — get grounded, sourced answers.
 
+> [!NOTE]
+> **Disclaimer:** This is an educational project. It is not affiliated with, endorsed by, or related to the Knesset or any Israeli government body. Data is sourced from the Knesset's publicly available OData API. Answers are AI-generated and should not be relied upon for legal, political, or official purposes.
+
 ## Architecture
 
 ```
