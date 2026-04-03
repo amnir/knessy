@@ -1,15 +1,25 @@
 """
 LangGraph agent definition — adaptive research loop.
 
-    planner → researcher → evaluator → [sufficient?]
-                                         ├── yes → synthesizer → END
-                                         └── no  → planner (loop back)
+    planner → researcher → grader → [reformulate?]
+                                      ├── yes → planner (loop back)
+                                      └── no  → evaluator → [sufficient?]
+                                                              ├── yes → synthesizer → END
+                                                              └── no  → planner (loop back)
 """
 
 from langgraph.graph import END, StateGraph
 
+from agent.grader import grader
 from agent.nodes import evaluator, planner, researcher, synthesizer
 from agent.state import AgentState
+
+
+def after_grader(state: AgentState) -> str:
+    """Route after grading: reformulate if relevance is too low."""
+    if state.get("reformulate", False):
+        return "planner"
+    return "evaluator"
 
 
 def should_continue(state: AgentState) -> str:
@@ -26,15 +36,26 @@ def build_graph() -> StateGraph:
     # Add nodes
     graph.add_node("planner", planner)
     graph.add_node("researcher", researcher)
+    graph.add_node("grader", grader)
     graph.add_node("evaluator", evaluator)
     graph.add_node("synthesizer", synthesizer)
 
     # Add edges (the flow)
     graph.set_entry_point("planner")
     graph.add_edge("planner", "researcher")
-    graph.add_edge("researcher", "evaluator")
+    graph.add_edge("researcher", "grader")
 
-    # Conditional edge: the research cycle
+    # Grader decides: reformulate or proceed to evaluation
+    graph.add_conditional_edges(
+        "grader",
+        after_grader,
+        {
+            "planner": "planner",
+            "evaluator": "evaluator",
+        },
+    )
+
+    # Evaluator decides: synthesize or loop back
     graph.add_conditional_edges(
         "evaluator",
         should_continue,

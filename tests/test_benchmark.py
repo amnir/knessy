@@ -32,6 +32,8 @@ def _run_agent(question: str) -> str:
             "messages": [],
             "research_tasks": [],
             "research_results": [],
+            "grading_results": [],
+            "reformulate": False,
             "is_sufficient": False,
             "eval_feedback": "",
             "iteration": 0,

@@ -58,6 +58,24 @@ def planner(state: AgentState) -> dict:
         eval_feedback = state.get("eval_feedback", "")
         if eval_feedback:
             prior_context += f"\nEvaluator feedback — what's missing:\n{eval_feedback}\n"
+
+        # Include grading feedback so planner knows what was filtered
+        grading_results = state.get("grading_results", [])
+        if grading_results:
+            prior_context += "\nCRAG grading results (chunks filtered for relevance):\n"
+            for g in grading_results:
+                prior_context += (
+                    f"- {g.task_tool}({g.task_args}): "
+                    f"{g.relevant_chunks}/{g.total_chunks} chunks relevant "
+                    f"({g.relevance_ratio:.0%})\n"
+                )
+            if state.get("reformulate", False):
+                prior_context += (
+                    "\nMost retrieved chunks were IRRELEVANT. "
+                    "You MUST use substantially different Hebrew search terms, "
+                    "synonyms, or rephrasings. Do not repeat similar queries.\n"
+                )
+
         prior_context += "\nPlan NEW queries with DIFFERENT search terms to fill the gaps above."
 
     system_prompt = """You are a research planner for an Israeli Knesset (parliament) data assistant.

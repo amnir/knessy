@@ -23,6 +23,18 @@ class ResearchResult:
     result: str
 
 
+@dataclass
+class GradingResult:
+    """CRAG grading result for a single research result."""
+
+    task_tool: str
+    task_args: dict
+    total_chunks: int
+    relevant_chunks: int
+    filtered_result: str
+    relevance_ratio: float
+
+
 class AgentState(TypedDict):
     """State flowing through the agent graph."""
 
@@ -30,6 +42,8 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     research_tasks: list[ResearchTask]
     research_results: list[ResearchResult]
+    grading_results: list[GradingResult]
+    reformulate: bool
     is_sufficient: bool
     eval_feedback: str
     iteration: int

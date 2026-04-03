@@ -24,6 +24,8 @@ async def run(question: str):
         "messages": [],
         "research_tasks": [],
         "research_results": [],
+        "grading_results": [],
+        "reformulate": False,
         "is_sufficient": False,
         "eval_feedback": "",
         "iteration": 0,
@@ -45,6 +47,13 @@ async def run(question: str):
                 for r in node_output["research_results"]:
                     preview = r.result[:150].replace("\n", " ")
                     print(f"  ✓ {r.task.tool}: {preview}...")
+
+            # Show grader's results
+            if node_name == "grader" and "grading_results" in node_output:
+                for g in node_output["grading_results"]:
+                    print(f"  {g.relevant_chunks}/{g.total_chunks} chunks relevant ({g.relevance_ratio:.0%})")
+                if node_output.get("reformulate"):
+                    print("  -> Reformulating query (low relevance)")
 
             # Show evaluator's verdict
             if node_name == "evaluator":
