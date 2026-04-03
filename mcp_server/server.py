@@ -305,15 +305,54 @@ async def search_protocols(
     Returns:
         Relevant excerpts from committee protocol transcripts with source info.
     """
+    return await _search_protocols_impl(
+        query, top, committee_id, from_date, to_date,
+        use_analysis=True, use_rerank=True,
+    )
+
+
+async def search_protocols_for_agent(
+    query: str,
+    top: int = 5,
+    committee_id: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> str:
+    """Agent-optimized search: skips query analysis and reranking.
+
+    The planner decides filters explicitly. Query analysis can over-constrain
+    (e.g. narrowing to a committee when the topic spans multiple committees).
+    The judge node handles relevance filtering post-retrieval.
+    """
+    return await _search_protocols_impl(
+        query, top, committee_id, from_date, to_date,
+        use_analysis=False, use_rerank=False,
+    )
+
+
+async def _search_protocols_impl(
+    query: str,
+    top: int = 5,
+    committee_id: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    *,
+    use_analysis: bool = True,
+    use_rerank: bool = True,
+) -> str:
+    """Core search implementation shared by MCP tool and agent."""
     # Query analysis: extract structured constraints when caller didn't provide them
-    analysis = _analyze_query(query) if not (committee_id or from_date or to_date) else None
-    if analysis:
-        if not from_date and analysis.get("from_date"):
-            from_date = analysis["from_date"]
-        if not to_date and analysis.get("to_date"):
-            to_date = analysis["to_date"]
-        if not committee_id and analysis.get("committee_hint"):
-            committee_id = await _resolve_committee_id(analysis["committee_hint"])
+    if use_analysis:
+        analysis = _analyze_query(query) if not (committee_id or from_date or to_date) else None
+        if analysis:
+            if not from_date and analysis.get("from_date"):
+                from_date = analysis["from_date"]
+            if not to_date and analysis.get("to_date"):
+                to_date = analysis["to_date"]
+            if not committee_id and analysis.get("committee_hint"):
+                committee_id = await _resolve_committee_id(analysis["committee_hint"])
+
+    do_rerank = use_rerank and ENABLE_RERANK
 
     # Embedding: optionally use HyDE for better semantic matching
     if ENABLE_HYDE:
@@ -342,7 +381,7 @@ async def search_protocols(
         filter_clauses.append({"range": {"session_date": {"lte": to_date}}})
 
     # Over-fetch candidates for reranking
-    fetch_size = top * 4 if ENABLE_RERANK else top
+    fetch_size = top * 4 if do_rerank else top
 
     # Build kNN clause with filters inside so Lucene can use efficient
     # filtered search (exact kNN on small filtered sets, approximate on large).
@@ -391,7 +430,7 @@ async def search_protocols(
         return f"No committee protocol content found for: {query}"
 
     # Rerank if enabled
-    if ENABLE_RERANK:
+    if do_rerank:
         hits = _rerank(query, hits, top)
 
     results = []

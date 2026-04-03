@@ -11,6 +11,7 @@ Usage:
 """
 
 import asyncio
+import logging
 
 import dotenv
 dotenv.load_dotenv()
@@ -18,6 +19,8 @@ dotenv.load_dotenv()
 import pytest
 
 from tests.benchmark_cases import BENCHMARK_CASES
+
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
 
 def _run_agent(question: str) -> str:

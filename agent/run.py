@@ -48,17 +48,17 @@ async def run(question: str):
                     preview = r.result[:150].replace("\n", " ")
                     print(f"  ✓ {r.task.tool}: {preview}...")
 
-            # Show grader's results
-            if node_name == "grader" and "grading_results" in node_output:
-                for g in node_output["grading_results"]:
-                    print(f"  {g.relevant_chunks}/{g.total_chunks} chunks relevant ({g.relevance_ratio:.0%})")
+            # Show judge's verdict
+            if node_name == "judge":
+                if "grading_results" in node_output:
+                    for g in node_output["grading_results"]:
+                        print(f"  {g.relevant_chunks}/{g.total_chunks} chunks relevant ({g.relevance_ratio:.0%})")
                 if node_output.get("reformulate"):
                     print("  -> Reformulating query (low relevance)")
-
-            # Show evaluator's verdict
-            if node_name == "evaluator":
-                sufficient = node_output.get("is_sufficient", False)
-                print(f"  {'✓ Sufficient' if sufficient else '✗ Need more research'}")
+                elif node_output.get("is_sufficient"):
+                    print("  -> Sufficient")
+                else:
+                    print("  -> Need more research")
 
             # Show final answer
             if node_name == "synthesizer" and "final_answer" in node_output:

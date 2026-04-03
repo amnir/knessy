@@ -4,21 +4,23 @@ Agent graph nodes — each is a function that takes state and returns partial st
 Nodes:
 - planner: Analyzes the question and decides what to research
 - researcher: Calls Knesset API and OpenSearch to gather data
-- evaluator: Decides if enough data has been gathered
 - synthesizer: Produces a grounded answer with sources
+
+The judge node (grading + evaluation) lives in agent/judge.py.
 """
 
 import json
+import logging
 
 from openai import OpenAI
 
 from agent.state import AgentState, ResearchResult, ResearchTask
 from mcp_server import knesset_client
 
+log = logging.getLogger("agent")
+
 client = OpenAI()
 MODEL = "gpt-4o"
-
-MAX_ITERATIONS = 3
 
 # Maps tool names to actual functions
 TOOL_REGISTRY = {
@@ -126,6 +128,9 @@ Respond ONLY with the JSON array."""
             reason=item.get("reason", ""),
         ))
 
+    log.info("Planner iter %d: %d tasks — %s", iteration + 1, len(tasks),
+             ", ".join(f"{t.tool}({t.args.get('query', '')[:30]})" for t in tasks))
+
     return {
         "research_tasks": tasks,
         "iteration": iteration + 1,
@@ -142,10 +147,11 @@ async def researcher(state: AgentState) -> dict:
     for task in tasks:
         try:
             if task.tool == "search_protocols":
-                # search_protocols goes through OpenSearch, not the OData client
-                # Import here to avoid circular imports at module level
-                from mcp_server.server import search_protocols
-                result = await search_protocols(**task.args)
+                # Agent-optimized path: skips query analysis (planner
+                # already structured the query) and reranking (judge
+                # handles relevance filtering post-retrieval).
+                from mcp_server.server import search_protocols_for_agent
+                result = await search_protocols_for_agent(**task.args)
             elif task.tool in TOOL_REGISTRY:
                 result = await TOOL_REGISTRY[task.tool](**task.args)
                 # Format raw API results for readability
@@ -161,67 +167,13 @@ async def researcher(state: AgentState) -> dict:
         new_results.append(ResearchResult(task=task, result=str(result)))
 
     all_results = existing_results + new_results
+    log.info("Researcher: %d calls done, %d total results", len(new_results), len(all_results))
 
     return {
         "research_results": all_results,
         "messages": [{"role": "assistant", "content": f"Research: executed {len(new_results)} tool calls, {len(all_results)} total results gathered"}],
     }
 
-
-def evaluator(state: AgentState) -> dict:
-    """Decide if enough data has been gathered to answer the question."""
-    question = state["question"]
-    results = state.get("research_results", [])
-    iteration = state.get("iteration", 0)
-
-    # Safety: force stop after MAX_ITERATIONS
-    if iteration >= MAX_ITERATIONS:
-        return {
-            "is_sufficient": True,
-            "messages": [{"role": "assistant", "content": f"Evaluation: max iterations ({MAX_ITERATIONS}) reached, proceeding to synthesis"}],
-        }
-
-    # Deduplicate before summarizing
-    deduped = _deduplicate_results(results)
-    results_summary = ""
-    for r in deduped:
-        results_summary += f"\n- Tool: {r.task.tool}({r.task.args})\n  Result preview: {r.result[:500]}...\n"
-
-    system_prompt = """You are an evaluator for a Knesset research agent.
-Given the user's question and the research gathered so far, decide: is there enough to answer?
-
-Rules:
-1. If the results contain relevant information that addresses the question, mark SUFFICIENT.
-2. Mark INSUFFICIENT only if there is a specific, named gap — e.g. "found the bill but no vote data", "found committee A but not committee B which was also mentioned."
-3. NEVER request more research just for "more results" or "more detail" on the same topic.
-4. If the same query was already tried and returned results, those results are final — do not retry.
-
-When marking insufficient, you MUST provide concrete guidance for the next search:
-- What specific Hebrew search terms to try
-- What specific committee or date range to target
-- What specific bill ID or vote to look up
-
-Respond with JSON:
-{"sufficient": true/false, "reason": "explanation", "guidance": "specific next steps if insufficient, empty string if sufficient"}
-
-Respond ONLY with the JSON object."""
-
-    user_prompt = f"Question: {question}\n\nResearch results so far (iteration {iteration}):\n{results_summary}"
-
-    raw = _call_llm(system_prompt, user_prompt)
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[1]
-        cleaned = cleaned.rsplit("```", 1)[0]
-
-    verdict = json.loads(cleaned)
-    is_sufficient = verdict.get("sufficient", True)
-
-    return {
-        "is_sufficient": is_sufficient,
-        "eval_feedback": verdict.get("guidance", ""),
-        "messages": [{"role": "assistant", "content": f"Evaluation: {'sufficient' if is_sufficient else 'need more research'} — {verdict.get('reason', '')}"}],
-    }
 
 
 def _deduplicate_results(results: list[ResearchResult]) -> list[ResearchResult]:
@@ -270,6 +222,7 @@ Rules:
     user_prompt = f"Question: {question}\n\nResearch data:\n{results_text}"
 
     answer = _call_llm(system_prompt, user_prompt)
+    log.info("Synthesizer: produced %d char answer", len(answer))
 
     return {
         "final_answer": answer,
