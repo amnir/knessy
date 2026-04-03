@@ -344,16 +344,22 @@ async def search_protocols(
     # Over-fetch candidates for reranking
     fetch_size = top * 4 if ENABLE_RERANK else top
 
+    # Build kNN clause with filters inside so Lucene can use efficient
+    # filtered search (exact kNN on small filtered sets, approximate on large).
+    # Putting filters on the outer bool instead causes kNN to run on the full
+    # index first and discard filtered-out results after — missing relevant hits.
+    knn_clause = {
+        "embedding": {
+            "vector": search_vector,
+            "k": fetch_size,
+        },
+    }
+    if filter_clauses:
+        knn_clause["embedding"]["filter"] = {"bool": {"must": filter_clauses}}
+
     bool_query = {
         "should": [
-            {
-                "knn": {
-                    "embedding": {
-                        "vector": search_vector,
-                        "k": fetch_size,
-                    },
-                },
-            },
+            {"knn": knn_clause},
             {
                 "match": {
                     "text": {
