@@ -157,7 +157,7 @@ BENCHMARK_CASES = [
                 "description": "Mentions Economics Committee chair David Bitan",
             },
             {
-                "text": "ועדה מיוחדת",
+                "text": "המיוחדת",
                 "weight": 3,
                 "description": "References the special committee",
             },
