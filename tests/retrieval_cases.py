@@ -35,7 +35,7 @@ RETRIEVAL_CASES = [
         "id": "karhi_smoking_gun",
         "description": "Find Karhi's 'intent of the intender' quote — hardest needle",
         "query": "כוונת המכוון קרעי רפורמה תקשורת",
-        "relevant_chunk_ids": {"4833212_69", "4833212_68"},
+        "relevant_chunk_ids": {"2224193_69", "2224193_68"},
         "filters": {
             "from_date": "2024-12-01",
             "to_date": "2024-12-31",
@@ -191,7 +191,7 @@ RETRIEVAL_CASES = [
         "id": "no_filter_karhi",
         "description": "Karhi smoking gun WITHOUT any filters — stress test",
         "query": "קרעי רפורמה תקשורת ועדת החוקה",
-        "relevant_chunk_ids": {"4833212_69", "4833212_68"},
+        "relevant_chunk_ids": {"2224193_69", "2224193_68"},
         "filters": {},
         "tags": ["no-filter", "stress-test"],
     },
