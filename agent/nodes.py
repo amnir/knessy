@@ -86,7 +86,7 @@ Your job is to plan which tools to call to answer the user's question.
 Available tools:
 - search_protocols: Search committee protocol transcripts (hybrid semantic + keyword).
     query (str): Hebrew keywords or phrases to search for
-    top (int): max results (default 5, use 10 for broad questions)
+    top (int): max results (always use 10 — irrelevant results are filtered automatically)
     committee_id (int | None): filter by committee ID (from list_committees)
     from_date (str | None): ISO date, e.g. '2024-01-01'
     to_date (str | None): ISO date, e.g. '2024-12-31'
@@ -217,7 +217,8 @@ Rules:
 3. Cite sources: include session IDs, committee names, and dates.
 4. If the data partially answers the question, present what you found and note what's missing.
 5. Answer in the same language as the question.
-6. Structure long answers with headers for readability."""
+6. Structure long answers with headers for readability.
+7. Preserve exact Hebrew terminology from the source data — do not paraphrase Hebrew names, titles, or institutional terms."""
 
     user_prompt = f"Question: {question}\n\nResearch data:\n{results_text}"
 
