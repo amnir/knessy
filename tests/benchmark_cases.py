@@ -43,7 +43,7 @@ BENCHMARK_CASES = [
                 "description": "Correct date range (December 2024)",
             },
             {
-                "text": "הצעות חוק פרטיות",
+                "text": "חוק פרטי",
                 "weight": 1,
                 "description": "Mentions the reform was split into private bills",
             },
@@ -106,7 +106,7 @@ BENCHMARK_CASES = [
                 "description": "References democracy argument",
             },
             {
-                "text": "תקשורת חופשית",
+                "text": "חופשי",
                 "weight": 2,
                 "description": "References free press argument",
             },
