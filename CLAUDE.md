@@ -16,6 +16,9 @@ docker compose up -d
 # Agent CLI
 python3 -m agent.run "your question"
 
+# Web UI (chat + OpenSearch search)
+python -m ui.app
+
 # MCP server (usually launched by Claude Desktop, not manually)
 python3 -m mcp_server.server
 
@@ -29,6 +32,7 @@ python3 -m ingest.opensearch_setup  # reset index
 - **MCP server** (`mcp_server/`) — serves Claude Desktop over MCP protocol (stdio transport). This is the ONLY place MCP is used.
 - **LangGraph agent** (`agent/`) — calls `knesset_client.py` and OpenSearch directly via Python imports. Does NOT use MCP. Do not reference MCP in agent code.
 - **Knesset client** (`mcp_server/knesset_client.py`) — shared data access layer used by both the MCP server and the agent.
+- **Web UI** (`ui/`) — Gradio app with chat (streams agent progress) and direct OpenSearch search tabs. Pure presentation layer — does not modify agent behavior.
 - **Ingestion** (`ingest/`) — offline batch pipeline. Independent from the agent and MCP server.
 
 ## Knesset API

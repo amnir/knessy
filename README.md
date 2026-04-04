@@ -18,8 +18,9 @@ User → CLI/Agent →   Planner → Researcher → Evaluator ─── need mor
                                            Synthesizer → Answer
 ```
 
-**Two interfaces to the same data:**
+**Three interfaces to the same data:**
 
+- **Web UI** — Gradio chat interface with streaming agent progress and direct OpenSearch search
 - **MCP server** — Claude Desktop connects over MCP protocol and calls tools interactively
 - **LangGraph agent** — Automated research loop that plans, gathers data, evaluates sufficiency, and synthesizes answers
 
@@ -63,6 +64,7 @@ The MCP server exposes four tools that Claude Desktop (or any MCP-compatible cli
 | LLM | OpenAI GPT-4o |
 | Embeddings | OpenAI text-embedding-3-small |
 | Vector + full-text search | OpenSearch 2.19 (kNN + BM25) |
+| Web UI | Gradio |
 | Tool protocol | Model Context Protocol (MCP) |
 | Data source | Knesset OData v3 API |
 | HTTP client | httpx (async) |
@@ -118,6 +120,15 @@ PYTHONPATH=. python3 -m ingest.ingest --knesset-num 25 --limit 5 --dry-run
 ```bash
 PYTHONPATH=. python3 -m agent.run "What education bills were proposed in the 25th Knesset?"
 PYTHONPATH=. python3 -m agent.run "מה נאמר בוועדות הכנסת על חדשנות טכנולוגית בחברה הערבית?"
+```
+
+### Web UI
+
+A Gradio-based UI with two tabs: **Chat** (agent Q&A with streaming progress) and **Search** (direct OpenSearch text search with filters).
+
+```bash
+source .venv/bin/activate && PYTHONPATH=. python -m ui.app
+# Opens at http://127.0.0.1:7860
 ```
 
 ### Claude Desktop Integration
