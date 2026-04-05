@@ -22,5 +22,8 @@ opensearch-data/
 # Downloaded protocol files (cached, re-downloadable)
 data/
 
+# Playwright MCP artifacts
+.playwright-mcp/
+
 # Personal notes
 LEARNINGS.md

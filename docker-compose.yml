@@ -7,6 +7,7 @@ services:
       - plugins.security.disabled=true  # Local dev only — no auth overhead
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=K9nesset_Dev!2026  # Required by init script even when security is disabled
       - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - path.repo=/usr/share/opensearch/snapshots
     ports:
       - "9200:9200"
     volumes:
