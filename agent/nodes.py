@@ -19,8 +19,12 @@ from mcp_server import knesset_client
 
 log = logging.getLogger("agent")
 
-client = OpenAI()
+client = OpenAI(max_retries=3)
 MODEL = "gpt-4o"
+
+# Token budget — hard ceiling per agent run to prevent runaway costs.
+# gpt-4o at ~$5/1M input + ~$15/1M output; 200K tokens ≈ $2 worst case.
+TOKEN_BUDGET = 200_000
 
 # Maps tool names to actual functions
 TOOL_REGISTRY = {
@@ -32,8 +36,19 @@ TOOL_REGISTRY = {
 }
 
 
-def _call_llm(system_prompt: str, user_prompt: str) -> str:
-    """Call OpenAI chat completion. Centralized for consistency."""
+class TokenBudgetExceeded(Exception):
+    """Raised when the agent's token budget is exhausted."""
+
+
+def _check_budget(state: dict) -> None:
+    """Raise if the token budget has been exhausted."""
+    used = state.get("total_tokens", 0)
+    if used >= TOKEN_BUDGET:
+        raise TokenBudgetExceeded(f"Token budget exhausted ({used:,}/{TOKEN_BUDGET:,})")
+
+
+def _call_llm(system_prompt: str, user_prompt: str) -> tuple[str, int]:
+    """Call OpenAI chat completion. Returns (content, total_tokens)."""
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
@@ -42,11 +57,13 @@ def _call_llm(system_prompt: str, user_prompt: str) -> str:
         ],
         temperature=0,
     )
-    return response.choices[0].message.content
+    tokens = response.usage.total_tokens if response.usage else 0
+    return response.choices[0].message.content, tokens
 
 
 def planner(state: AgentState) -> dict:
     """Analyze the question and produce a list of research tasks."""
+    _check_budget(state)
     question = state["question"]
     iteration = state.get("iteration", 0)
 
@@ -111,7 +128,7 @@ Respond ONLY with the JSON array."""
 
     user_prompt = f"Question: {question}{prior_context}"
 
-    raw = _call_llm(system_prompt, user_prompt)
+    raw, tokens_used = _call_llm(system_prompt, user_prompt)
 
     # Parse the JSON response
     # Strip markdown code fences if present
@@ -134,6 +151,7 @@ Respond ONLY with the JSON array."""
     return {
         "research_tasks": tasks,
         "iteration": iteration + 1,
+        "total_tokens": state.get("total_tokens", 0) + tokens_used,
         "messages": [{"role": "assistant", "content": f"Planning: identified {len(tasks)} research tasks for iteration {iteration + 1}"}],
     }
 
@@ -205,6 +223,7 @@ def _truncate_results(results: list[ResearchResult], max_chars: int = 20000) -> 
 
 def synthesizer(state: AgentState) -> dict:
     """Produce a final grounded answer with sources."""
+    _check_budget(state)
     question = state["question"]
     results = _deduplicate_results(state.get("research_results", []))
     results_text = _truncate_results(results)
@@ -222,10 +241,11 @@ Rules:
 
     user_prompt = f"Question: {question}\n\nResearch data:\n{results_text}"
 
-    answer = _call_llm(system_prompt, user_prompt)
+    answer, tokens_used = _call_llm(system_prompt, user_prompt)
     log.info("Synthesizer: produced %d char answer", len(answer))
 
     return {
         "final_answer": answer,
+        "total_tokens": state.get("total_tokens", 0) + tokens_used,
         "messages": [{"role": "assistant", "content": answer}],
     }

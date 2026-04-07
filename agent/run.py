@@ -35,6 +35,7 @@ async def run(question: str):
         "eval_feedback": "",
         "iteration": 0,
         "final_answer": "",
+        "total_tokens": 0,
     }
 
     # Stream node-by-node so we can see the agent's reasoning

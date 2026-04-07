@@ -13,5 +13,17 @@ services:
     volumes:
       - opensearch-data:/usr/share/opensearch/data
 
+  app:
+    build: .
+    container_name: knessy-app
+    env_file: .env
+    environment:
+      - OPENSEARCH_HOST=opensearch
+      - PYTHONPATH=.
+    ports:
+      - "7860:7860"
+    depends_on:
+      - opensearch
+
 volumes:
   opensearch-data:

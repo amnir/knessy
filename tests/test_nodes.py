@@ -15,14 +15,17 @@ from agent.state import AgentState, ResearchResult, ResearchTask
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _mock_openai_response(content: str):
+def _mock_openai_response(content: str, total_tokens: int = 100):
     """Build a mock OpenAI chat completion response."""
     msg = MagicMock()
     msg.content = content
     choice = MagicMock()
     choice.message = msg
+    usage = MagicMock()
+    usage.total_tokens = total_tokens
     resp = MagicMock()
     resp.choices = [choice]
+    resp.usage = usage
     return resp
 
 
@@ -38,6 +41,7 @@ def _base_state(**overrides) -> AgentState:
         "eval_feedback": "",
         "iteration": 0,
         "final_answer": "",
+        "total_tokens": 0,
     }
     defaults.update(overrides)
     return defaults
@@ -285,6 +289,30 @@ class TestSynthesizer:
 # ---------------------------------------------------------------------------
 # OData escaping
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Token budget
+# ---------------------------------------------------------------------------
+
+class TestTokenBudget:
+    @patch("agent.nodes.client")
+    def test_planner_tracks_tokens(self, mock_client):
+        tasks_json = json.dumps([{"tool": "search_protocols", "args": {"query": "test"}, "reason": "r"}])
+        mock_client.chat.completions.create.return_value = _mock_openai_response(tasks_json, total_tokens=500)
+
+        from agent.nodes import planner
+        result = planner(_base_state())
+
+        assert result["total_tokens"] == 500
+
+    @patch("agent.nodes.client")
+    def test_budget_exceeded_raises(self, mock_client):
+        from agent.nodes import TOKEN_BUDGET, TokenBudgetExceeded, planner
+        state = _base_state(total_tokens=TOKEN_BUDGET)
+
+        with pytest.raises(TokenBudgetExceeded):
+            planner(state)
+
 
 class TestODataEscape:
     def test_escapes_single_quotes(self):

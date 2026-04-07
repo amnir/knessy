@@ -132,6 +132,7 @@ async def respond(message: str, history: list, lang: str):
         "eval_feedback": "",
         "iteration": 0,
         "final_answer": "",
+        "total_tokens": 0,
     }
 
     start = time.time()
@@ -380,4 +381,4 @@ with gr.Blocks(title="Knessy — Knesset Research Assistant") as app:
     )
 
 if __name__ == "__main__":
-    app.launch()
+    app.launch(server_name="0.0.0.0")

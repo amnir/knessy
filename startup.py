@@ -32,11 +32,14 @@ def check_env():
         sys.exit(1)
 
 
-def check_opensearch(host: str = "localhost", port: int = 9200) -> OpenSearch:
+def check_opensearch() -> OpenSearch:
     """Return an OpenSearch client after verifying connectivity.
 
-    Exits with a clear message if OpenSearch is unreachable.
+    Reads host/port from OPENSEARCH_HOST and OPENSEARCH_PORT env vars,
+    defaulting to localhost:9200.
     """
+    host = os.getenv("OPENSEARCH_HOST", "localhost")
+    port = int(os.getenv("OPENSEARCH_PORT", "9200"))
     client = OpenSearch(hosts=[{"host": host, "port": port}], use_ssl=False)
     try:
         client.info()

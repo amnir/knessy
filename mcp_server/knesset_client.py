@@ -10,9 +10,31 @@ All return JSON via $format=json. Pagination is 100 records/page
 with server-driven odata.nextLink for more.
 """
 
+import asyncio
+import logging
+
 import httpx
 
+log = logging.getLogger("knesset_client")
+
 BASE_URL = "https://knesset.gov.il/Odata"
+
+MAX_RETRIES = 3
+BACKOFF_BASE = 1.0  # seconds
+
+
+async def _fetch(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+    """GET with exponential backoff on 429/5xx errors."""
+    for attempt in range(MAX_RETRIES + 1):
+        resp = await client.get(url, **kwargs)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            if attempt < MAX_RETRIES:
+                delay = BACKOFF_BASE * (2 ** attempt)
+                log.warning("Knesset API %d on %s, retrying in %.1fs", resp.status_code, url, delay)
+                await asyncio.sleep(delay)
+                continue
+        return resp
+    return resp  # unreachable, but satisfies type checker
 
 
 def _odata_escape(value: str) -> str:
@@ -54,7 +76,7 @@ async def search_bills(
         params["$filter"] = " and ".join(filters)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(f"{PARLIAMENT_URL}/KNS_Bill", params=params)
+        resp = await _fetch(client, f"{PARLIAMENT_URL}/KNS_Bill", params=params)
         resp.raise_for_status()
 
     data = resp.json()
@@ -64,10 +86,7 @@ async def search_bills(
 async def get_bill(bill_id: int) -> dict | None:
     """Get a single bill by ID."""
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{PARLIAMENT_URL}/KNS_Bill({bill_id})",
-            params={"$format": "json"},
-        )
+        resp = await _fetch(client, f"{PARLIAMENT_URL}/KNS_Bill({bill_id})", params={"$format": "json"})
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
@@ -78,7 +97,8 @@ async def get_bill(bill_id: int) -> dict | None:
 async def get_vote_results(vote_id: int) -> list[dict]:
     """Get individual MK votes for a specific vote."""
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
+        resp = await _fetch(
+            client,
             f"{VOTES_URL}/vote_rslts_kmmbr_shadow",
             params={
                 "$format": "json",
@@ -106,7 +126,7 @@ async def list_committees(knesset_num: int | None = None, top: int = 50) -> list
         params["$filter"] = f"KnessetNum eq {knesset_num}"
 
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(f"{PARLIAMENT_URL}/KNS_Committee", params=params)
+        resp = await _fetch(client, f"{PARLIAMENT_URL}/KNS_Committee", params=params)
         resp.raise_for_status()
 
     data = resp.json()
@@ -130,7 +150,8 @@ async def get_bill_votes(bill_id: int) -> list[dict]:
 
     # Search votes where the session item description contains the bill name
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
+        resp = await _fetch(
+            client,
             f"{VOTES_URL}/View_vote_rslts_hdr_Approved",
             params={
                 "$format": "json",

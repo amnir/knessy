@@ -15,7 +15,7 @@ log = logging.getLogger("agent")
 
 from agent.state import AgentState, GradingResult, ResearchResult
 
-client = OpenAI()
+client = OpenAI(max_retries=3)
 JUDGE_MODEL = "gpt-4o-mini"
 RELEVANCE_THRESHOLD = 0.5
 MAX_ITERATIONS = 3
@@ -86,6 +86,9 @@ def judge(state: AgentState) -> dict:
         f"[Chunk {i}]\n{chunk[:800]}" for i, chunk in enumerate(all_chunks)
     )
 
+    from agent.nodes import _check_budget
+    _check_budget(state)
+
     response = client.beta.chat.completions.parse(
         model=JUDGE_MODEL,
         messages=[
@@ -114,6 +117,8 @@ def judge(state: AgentState) -> dict:
         response_format=JudgeVerdict,
         temperature=0,
     )
+
+    judge_tokens = response.usage.total_tokens if response.usage else 0
 
     verdict = response.choices[0].message.parsed
     relevance = verdict.relevant
@@ -187,5 +192,6 @@ def judge(state: AgentState) -> dict:
         "reformulate": should_reformulate,
         "is_sufficient": is_sufficient,
         "eval_feedback": verdict.guidance,
+        "total_tokens": state.get("total_tokens", 0) + judge_tokens,
         "messages": [{"role": "assistant", "content": summary}],
     }

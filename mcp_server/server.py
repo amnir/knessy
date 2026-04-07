@@ -21,7 +21,7 @@ from openai import OpenAI
 
 from mcp_server import knesset_client
 
-openai_client = OpenAI()
+openai_client = OpenAI(max_retries=3)
 os_client = check_opensearch()
 
 RERANKER_MODEL = "gpt-4o-mini"

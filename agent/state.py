@@ -48,3 +48,4 @@ class AgentState(TypedDict):
     eval_feedback: str
     iteration: int
     final_answer: str
+    total_tokens: int
