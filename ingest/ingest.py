@@ -15,7 +15,6 @@ Usage:
 
 import argparse
 import asyncio
-import json
 import logging
 import subprocess
 import tempfile
@@ -25,9 +24,11 @@ from pathlib import Path
 log = logging.getLogger("ingest")
 
 import dotenv
+
 dotenv.load_dotenv()
 
 from startup import check_env, check_opensearch
+
 check_env()
 
 import httpx

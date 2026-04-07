@@ -10,9 +10,11 @@ import asyncio
 import sys
 
 import dotenv
+
 dotenv.load_dotenv()
 
 from startup import check_env
+
 check_env()
 
 from agent.graph import agent

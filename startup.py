@@ -39,7 +39,7 @@ def check_opensearch(host: str = "localhost", port: int = 9200) -> OpenSearch:
     """
     client = OpenSearch(hosts=[{"host": host, "port": port}], use_ssl=False)
     try:
-        info = client.info()
+        client.info()
         return client
     except Exception as e:
         print(f"Cannot connect to OpenSearch at {host}:{port}: {e}", file=sys.stderr)

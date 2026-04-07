@@ -14,6 +14,7 @@ import asyncio
 import logging
 
 import dotenv
+
 dotenv.load_dotenv()
 
 import pytest

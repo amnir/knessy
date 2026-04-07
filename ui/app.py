@@ -6,7 +6,6 @@ Launch:
 """
 
 import time
-from dataclasses import asdict
 
 import dotenv
 import gradio as gr
@@ -14,6 +13,7 @@ import gradio as gr
 dotenv.load_dotenv()
 
 from startup import check_env, check_opensearch
+
 check_env()
 
 from agent.graph import agent

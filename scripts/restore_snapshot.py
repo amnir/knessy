@@ -32,7 +32,7 @@ def download_snapshot():
         return
 
     SNAPSHOT_DIR.mkdir(exist_ok=True)
-    print(f"Downloading snapshot from HuggingFace...")
+    print("Downloading snapshot from HuggingFace...")
 
     with httpx.stream("GET", HF_URL, follow_redirects=True, timeout=300) as resp:
         resp.raise_for_status()

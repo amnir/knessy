@@ -9,9 +9,11 @@ import json
 import os
 
 import dotenv
+
 dotenv.load_dotenv()
 
 from startup import check_env, check_opensearch
+
 check_env()
 
 from mcp.server.fastmcp import FastMCP
