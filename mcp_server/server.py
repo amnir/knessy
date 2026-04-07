@@ -11,14 +11,16 @@ import os
 import dotenv
 dotenv.load_dotenv()
 
+from startup import check_env, check_opensearch
+check_env()
+
 from mcp.server.fastmcp import FastMCP
 from openai import OpenAI
-from opensearchpy import OpenSearch
 
 from mcp_server import knesset_client
 
 openai_client = OpenAI()
-os_client = OpenSearch(hosts=[{"host": "localhost", "port": 9200}], use_ssl=False)
+os_client = check_opensearch()
 
 RERANKER_MODEL = "gpt-4o-mini"
 

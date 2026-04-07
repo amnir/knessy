@@ -14,6 +14,15 @@ import httpx
 
 BASE_URL = "https://knesset.gov.il/Odata"
 
+
+def _odata_escape(value: str) -> str:
+    """Escape a string for use in OData v3 filter expressions.
+
+    Single quotes are doubled per the OData v3 spec.
+    """
+    return value.replace("'", "''")
+
+
 PARLIAMENT_URL = f"{BASE_URL}/ParliamentInfo.svc"
 VOTES_URL = f"{BASE_URL}/Votes.svc"
 
@@ -30,7 +39,7 @@ async def search_bills(
     filters = []
 
     if query:
-        filters.append(f"substringof('{query}', Name)")
+        filters.append(f"substringof('{_odata_escape(query)}', Name)")
 
     if knesset_num:
         filters.append(f"KnessetNum eq {knesset_num}")
@@ -125,7 +134,7 @@ async def get_bill_votes(bill_id: int) -> list[dict]:
             f"{VOTES_URL}/View_vote_rslts_hdr_Approved",
             params={
                 "$format": "json",
-                "$filter": f"substringof('{bill_name}', sess_item_dscr)",
+                "$filter": f"substringof('{_odata_escape(bill_name)}', sess_item_dscr)",
                 "$orderby": "vote_date desc",
                 "$top": "20",
             },

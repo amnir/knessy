@@ -10,9 +10,11 @@ from dataclasses import asdict
 
 import dotenv
 import gradio as gr
-from opensearchpy import OpenSearch
 
 dotenv.load_dotenv()
+
+from startup import check_env, check_opensearch
+check_env()
 
 from agent.graph import agent
 from ingest.opensearch_setup import INDEX_NAME
@@ -20,7 +22,7 @@ from ingest.opensearch_setup import INDEX_NAME
 # ---------------------------------------------------------------------------
 # OpenSearch client (reused across search requests)
 # ---------------------------------------------------------------------------
-os_client = OpenSearch(hosts=[{"host": "localhost", "port": 9200}], use_ssl=False)
+os_client = check_opensearch()
 
 # ---------------------------------------------------------------------------
 # i18n

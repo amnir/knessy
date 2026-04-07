@@ -16,17 +16,22 @@ Usage:
 import argparse
 import asyncio
 import json
+import logging
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
+log = logging.getLogger("ingest")
+
 import dotenv
 dotenv.load_dotenv()
 
+from startup import check_env, check_opensearch
+check_env()
+
 import httpx
 from openai import OpenAI
-from opensearchpy import OpenSearch
 from opensearchpy.helpers import bulk
 
 PARLIAMENT_URL = "https://knesset.gov.il/Odata/ParliamentInfo.svc"
@@ -78,7 +83,7 @@ async def fetch_protocol_metadata(
                 break
             all_docs.extend(batch)
             skip += len(batch)
-            print(f"  Fetched metadata batch: {len(all_docs)} docs so far...")
+            log.info("Fetched metadata batch: %d docs so far", len(all_docs))
 
     # Filter to only .doc/.docx files (skip PDFs for now)
     return [d for d in all_docs if d.get("FilePath", "").endswith((".doc", ".docx"))]
@@ -99,7 +104,7 @@ async def download_protocol(doc: dict) -> Path | None:
             resp = await client.get(file_url)
             resp.raise_for_status()
         except httpx.HTTPError as e:
-            print(f"  Failed to download {file_url}: {e}")
+            log.warning("Failed to download %s: %s", file_url, e)
             return None
 
     local_path.write_bytes(resp.content)
@@ -118,7 +123,7 @@ def doc_to_text(doc_path: Path) -> str:
             capture_output=True,
         )
         if result.returncode != 0:
-            print(f"  textutil failed for {doc_path}: {result.stderr.decode()}")
+            log.warning("textutil failed for %s: %s", doc_path, result.stderr.decode())
             return ""
         text = Path(tmp_path).read_text(encoding="utf-8")
         Path(tmp_path).unlink()
@@ -129,7 +134,7 @@ def doc_to_text(doc_path: Path) -> str:
             capture_output=True,
         )
         if result.returncode != 0:
-            print(f"  catdoc failed for {doc_path}: {result.stderr.decode()}")
+            log.warning("catdoc failed for %s: %s", doc_path, result.stderr.decode())
             return ""
         return result.stdout.decode("utf-8", errors="replace")
 
@@ -245,19 +250,19 @@ async def run(
     date_desc = ""
     if from_date or to_date:
         date_desc = f", {from_date or '...'} to {to_date or '...'}"
-    print(f"Fetching protocol metadata (Knesset {knesset_num}, limit {limit}{date_desc})...")
+    log.info("Fetching protocol metadata (Knesset %d, limit %d%s)", knesset_num, limit, date_desc)
     docs = await fetch_protocol_metadata(knesset_num, limit, from_date, to_date)
-    print(f"Found {len(docs)} protocol documents")
+    log.info("Found %d protocol documents", len(docs))
 
     if not docs:
         return
 
-    print("Fetching committee name mapping...")
+    log.info("Fetching committee name mapping")
     committee_names = await fetch_committee_names()
-    print(f"Loaded {len(committee_names)} committee names")
+    log.info("Loaded %d committee names", len(committee_names))
 
     openai_client = OpenAI() if not dry_run else None
-    os_client = OpenSearch(hosts=[{"host": "localhost", "port": 9200}], use_ssl=False) if not dry_run else None
+    os_client = check_opensearch() if not dry_run else None
     total_indexed = 0
     total_errors = 0
     processed = 0
@@ -327,18 +332,18 @@ async def run(
                 processed += 1
                 elapsed = time.time() - start_time
                 rate = processed / elapsed if elapsed > 0 else 0
-                print(f"  [{processed}/{len(docs)}] doc {doc_id}: {success} chunks indexed ({rate:.1f} docs/sec)")
+                log.info("[%d/%d] doc %d: %d chunks indexed (%.1f docs/sec)", processed, len(docs), doc_id, success, rate)
 
         except Exception as e:
             async with lock:
                 processed += 1
-                print(f"  [{processed}/{len(docs)}] doc {doc_id}: FAILED — {e}")
+                log.error("[%d/%d] doc %d: FAILED — %s", processed, len(docs), doc_id, e)
 
     tasks = [process_one(i, doc) for i, doc in enumerate(docs)]
     await asyncio.gather(*tasks)
 
     elapsed = time.time() - start_time
-    print(f"\nDone. {total_indexed} chunks indexed ({total_errors} errors) in {elapsed:.0f}s")
+    log.info("Done. %d chunks indexed (%d errors) in %.0fs", total_indexed, total_errors, elapsed)
 
 
 def main():
