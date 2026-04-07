@@ -33,8 +33,9 @@ async def _fetch(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Respons
                 log.warning("Knesset API %d on %s, retrying in %.1fs", resp.status_code, url, delay)
                 await asyncio.sleep(delay)
                 continue
+            log.error("Knesset API %d on %s after %d retries, giving up", resp.status_code, url, MAX_RETRIES)
         return resp
-    return resp  # unreachable, but satisfies type checker
+    raise RuntimeError("Unreachable: retry loop completed without returning")
 
 
 def _odata_escape(value: str) -> str:

@@ -14,7 +14,7 @@ import logging
 
 from openai import OpenAI
 
-from agent.state import AgentState, ResearchResult, ResearchTask
+from agent.state import AgentState, ResearchResult, ResearchTask, check_budget
 from mcp_server import knesset_client
 
 log = logging.getLogger("agent")
@@ -22,11 +22,6 @@ log = logging.getLogger("agent")
 client = OpenAI(max_retries=3)
 MODEL = "gpt-4o"
 
-# Token budget — hard ceiling per agent run to prevent runaway costs.
-# gpt-4o at ~$5/1M input + ~$15/1M output; 200K tokens ≈ $2 worst case.
-TOKEN_BUDGET = 200_000
-
-# Maps tool names to actual functions
 TOOL_REGISTRY = {
     "search_bills": knesset_client.search_bills,
     "get_bill": knesset_client.get_bill,
@@ -34,17 +29,6 @@ TOOL_REGISTRY = {
     "get_vote_results": knesset_client.get_vote_results,
     "list_committees": knesset_client.list_committees,
 }
-
-
-class TokenBudgetExceeded(Exception):
-    """Raised when the agent's token budget is exhausted."""
-
-
-def _check_budget(state: dict) -> None:
-    """Raise if the token budget has been exhausted."""
-    used = state.get("total_tokens", 0)
-    if used >= TOKEN_BUDGET:
-        raise TokenBudgetExceeded(f"Token budget exhausted ({used:,}/{TOKEN_BUDGET:,})")
 
 
 def _call_llm(system_prompt: str, user_prompt: str) -> tuple[str, int]:
@@ -58,12 +42,13 @@ def _call_llm(system_prompt: str, user_prompt: str) -> tuple[str, int]:
         temperature=0,
     )
     tokens = response.usage.total_tokens if response.usage else 0
-    return response.choices[0].message.content, tokens
+    content = response.choices[0].message.content or ""
+    return content, tokens
 
 
 def planner(state: AgentState) -> dict:
     """Analyze the question and produce a list of research tasks."""
-    _check_budget(state)
+    check_budget(state)
     question = state["question"]
     iteration = state.get("iteration", 0)
 
@@ -138,7 +123,15 @@ Respond ONLY with the JSON array."""
         cleaned = cleaned.rsplit("```", 1)[0]
 
     tasks = []
-    for item in json.loads(cleaned):
+    try:
+        # LLMs sometimes output Python None/True/False instead of JSON null/true/false
+        sanitized = cleaned.replace(": None", ": null").replace(": True", ": true").replace(": False", ": false")
+        parsed = json.loads(sanitized)
+    except json.JSONDecodeError:
+        log.error("Planner returned invalid JSON: %s", cleaned[:200])
+        parsed = []
+
+    for item in parsed:
         tasks.append(ResearchTask(
             tool=item["tool"],
             args=item.get("args", {}),
@@ -165,9 +158,7 @@ async def researcher(state: AgentState) -> dict:
     for task in tasks:
         try:
             if task.tool == "search_protocols":
-                # Agent-optimized path: skips query analysis (planner
-                # already structured the query) and reranking (judge
-                # handles relevance filtering post-retrieval).
+                # Direct retrieval — query analysis and reranking happen in other nodes.
                 from mcp_server.server import search_protocols_for_agent
                 result = await search_protocols_for_agent(**task.args)
             elif task.tool in TOOL_REGISTRY:
@@ -180,6 +171,7 @@ async def researcher(state: AgentState) -> dict:
             else:
                 result = f"Unknown tool: {task.tool}"
         except Exception as e:
+            log.error("Tool %s(%s) failed: %s", task.tool, task.args, e, exc_info=True)
             result = f"Error calling {task.tool}: {e}"
 
         new_results.append(ResearchResult(task=task, result=str(result)))
@@ -223,7 +215,6 @@ def _truncate_results(results: list[ResearchResult], max_chars: int = 20000) -> 
 
 def synthesizer(state: AgentState) -> dict:
     """Produce a final grounded answer with sources."""
-    _check_budget(state)
     question = state["question"]
     results = _deduplicate_results(state.get("research_results", []))
     results_text = _truncate_results(results)

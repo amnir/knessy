@@ -5,6 +5,7 @@ import os
 import sys
 
 from opensearchpy import OpenSearch
+from opensearchpy.exceptions import ConnectionError as OSConnectionError
 
 
 def setup_logging():
@@ -39,12 +40,18 @@ def check_opensearch() -> OpenSearch:
     defaulting to localhost:9200.
     """
     host = os.getenv("OPENSEARCH_HOST", "localhost")
-    port = int(os.getenv("OPENSEARCH_PORT", "9200"))
+    port_str = os.getenv("OPENSEARCH_PORT", "9200")
+    try:
+        port = int(port_str)
+    except ValueError:
+        print(f"OPENSEARCH_PORT must be a number, got: {port_str!r}", file=sys.stderr)
+        sys.exit(1)
+
     client = OpenSearch(hosts=[{"host": host, "port": port}], use_ssl=False)
     try:
         client.info()
         return client
-    except Exception as e:
+    except (OSConnectionError, ConnectionError) as e:
         print(f"Cannot connect to OpenSearch at {host}:{port}: {e}", file=sys.stderr)
         print("Start it with: docker compose up -d", file=sys.stderr)
         sys.exit(1)

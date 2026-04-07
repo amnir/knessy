@@ -287,10 +287,6 @@ class TestSynthesizer:
 
 
 # ---------------------------------------------------------------------------
-# OData escaping
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Token budget
 # ---------------------------------------------------------------------------
 
@@ -307,12 +303,17 @@ class TestTokenBudget:
 
     @patch("agent.nodes.client")
     def test_budget_exceeded_raises(self, mock_client):
-        from agent.nodes import TOKEN_BUDGET, TokenBudgetExceeded, planner
+        from agent.nodes import planner
+        from agent.state import TOKEN_BUDGET, TokenBudgetExceeded
         state = _base_state(total_tokens=TOKEN_BUDGET)
 
         with pytest.raises(TokenBudgetExceeded):
             planner(state)
 
+
+# ---------------------------------------------------------------------------
+# OData escaping
+# ---------------------------------------------------------------------------
 
 class TestODataEscape:
     def test_escapes_single_quotes(self):
@@ -326,3 +327,97 @@ class TestODataEscape:
     def test_multiple_quotes(self):
         from mcp_server.knesset_client import _odata_escape
         assert _odata_escape("a'b'c") == "a''b''c"
+
+
+# ---------------------------------------------------------------------------
+# _fetch retry logic
+# ---------------------------------------------------------------------------
+
+class TestFetchRetry:
+    @pytest.mark.asyncio
+    async def test_retries_on_429(self):
+        from unittest.mock import AsyncMock as AM
+
+        from mcp_server.knesset_client import _fetch
+
+        mock_client = MagicMock()
+        resp_429 = MagicMock(status_code=429)
+        resp_200 = MagicMock(status_code=200)
+        mock_client.get = AM(side_effect=[resp_429, resp_200])
+
+        with patch("mcp_server.knesset_client.asyncio.sleep", new_callable=AM):
+            result = await _fetch(mock_client, "http://example.com")
+
+        assert result.status_code == 200
+        assert mock_client.get.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retries_on_500(self):
+        from unittest.mock import AsyncMock as AM
+
+        from mcp_server.knesset_client import _fetch
+
+        mock_client = MagicMock()
+        resp_500 = MagicMock(status_code=500)
+        resp_200 = MagicMock(status_code=200)
+        mock_client.get = AM(side_effect=[resp_500, resp_200])
+
+        with patch("mcp_server.knesset_client.asyncio.sleep", new_callable=AM):
+            result = await _fetch(mock_client, "http://example.com")
+
+        assert result.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_400(self):
+        from unittest.mock import AsyncMock as AM
+
+        from mcp_server.knesset_client import _fetch
+
+        mock_client = MagicMock()
+        resp_400 = MagicMock(status_code=400)
+        mock_client.get = AM(return_value=resp_400)
+
+        result = await _fetch(mock_client, "http://example.com")
+
+        assert result.status_code == 400
+        assert mock_client.get.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_exhausts_retries_and_returns_last(self):
+        from unittest.mock import AsyncMock as AM
+
+        from mcp_server.knesset_client import MAX_RETRIES, _fetch
+
+        mock_client = MagicMock()
+        resp_503 = MagicMock(status_code=503)
+        mock_client.get = AM(return_value=resp_503)
+
+        with patch("mcp_server.knesset_client.asyncio.sleep", new_callable=AM):
+            result = await _fetch(mock_client, "http://example.com")
+
+        assert result.status_code == 503
+        assert mock_client.get.call_count == MAX_RETRIES + 1
+
+
+# ---------------------------------------------------------------------------
+# Startup validation
+# ---------------------------------------------------------------------------
+
+class TestStartup:
+    def test_check_env_exits_on_missing_key(self):
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("OPENAI_API_KEY", None)
+            with pytest.raises(SystemExit):
+                from startup import check_env
+                check_env()
+
+    def test_check_env_passes_with_key(self):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            from startup import check_env
+            check_env()  # should not raise
+
+    def test_opensearch_port_validation(self):
+        with patch.dict(os.environ, {"OPENSEARCH_PORT": "not-a-number"}):
+            with pytest.raises(SystemExit):
+                from startup import check_opensearch
+                check_opensearch()

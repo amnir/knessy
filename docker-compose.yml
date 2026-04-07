@@ -12,6 +12,11 @@ services:
       - "9200:9200"
     volumes:
       - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 | grep -q opensearch"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   app:
     build: .
@@ -23,7 +28,9 @@ services:
     ports:
       - "7860:7860"
     depends_on:
-      - opensearch
+      opensearch:
+        condition: service_healthy
+    restart: on-failure
 
 volumes:
   opensearch-data:

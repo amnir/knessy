@@ -18,6 +18,7 @@ from startup import check_env
 check_env()
 
 from agent.graph import agent
+from agent.state import TokenBudgetExceeded
 
 
 async def run(question: str):
@@ -39,37 +40,41 @@ async def run(question: str):
     }
 
     # Stream node-by-node so we can see the agent's reasoning
-    async for event in agent.astream(initial_state):
-        for node_name, node_output in event.items():
-            print(f"\n[{node_name}]")
+    try:
+        async for event in agent.astream(initial_state):
+            for node_name, node_output in event.items():
+                print(f"\n[{node_name}]")
 
-            # Show planner's tasks
-            if node_name == "planner" and "research_tasks" in node_output:
-                for task in node_output["research_tasks"]:
-                    print(f"  → {task.tool}({task.args}) — {task.reason}")
+                # Show planner's tasks
+                if node_name == "planner" and "research_tasks" in node_output:
+                    for task in node_output["research_tasks"]:
+                        print(f"  -> {task.tool}({task.args}) -- {task.reason}")
 
-            # Show researcher's progress
-            if node_name == "researcher" and "research_results" in node_output:
-                for r in node_output["research_results"]:
-                    preview = r.result[:150].replace("\n", " ")
-                    print(f"  ✓ {r.task.tool}: {preview}...")
+                # Show researcher's progress
+                if node_name == "researcher" and "research_results" in node_output:
+                    for r in node_output["research_results"]:
+                        preview = r.result[:150].replace("\n", " ")
+                        print(f"  {r.task.tool}: {preview}...")
 
-            # Show judge's verdict
-            if node_name == "judge":
-                if "grading_results" in node_output:
-                    for g in node_output["grading_results"]:
-                        print(f"  {g.relevant_chunks}/{g.total_chunks} chunks relevant ({g.relevance_ratio:.0%})")
-                if node_output.get("reformulate"):
-                    print("  -> Reformulating query (low relevance)")
-                elif node_output.get("is_sufficient"):
-                    print("  -> Sufficient")
-                else:
-                    print("  -> Need more research")
+                # Show judge's verdict
+                if node_name == "judge":
+                    if "grading_results" in node_output:
+                        for g in node_output["grading_results"]:
+                            print(f"  {g.relevant_chunks}/{g.total_chunks} chunks relevant ({g.relevance_ratio:.0%})")
+                    if node_output.get("reformulate"):
+                        print("  -> Reformulating query (low relevance)")
+                    elif node_output.get("is_sufficient"):
+                        print("  -> Sufficient")
+                    else:
+                        print("  -> Need more research")
 
-            # Show final answer
-            if node_name == "synthesizer" and "final_answer" in node_output:
-                print(f"\n{'=' * 60}")
-                print(f"\nAnswer:\n{node_output['final_answer']}")
+                # Show final answer
+                if node_name == "synthesizer" and "final_answer" in node_output:
+                    print(f"\n{'=' * 60}")
+                    print(f"\nAnswer:\n{node_output['final_answer']}")
+    except TokenBudgetExceeded as e:
+        print(f"\n[budget] {e}")
+        print("The question required too many API calls. Try a more specific question.")
 
 
 def main():
