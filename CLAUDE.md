@@ -27,6 +27,19 @@ python3 -m ingest.ingest --knesset-num 25 --limit 20
 python3 -m ingest.opensearch_setup  # reset index
 ```
 
+## Testing
+
+```bash
+# Unit tests (no OpenSearch needed)
+OPENAI_API_KEY=test-key-not-used PYTHONPATH=. python -m pytest tests/test_nodes.py -v
+
+# Lint + type check
+ruff check .
+mypy agent/ mcp_server/ ingest/ startup.py
+```
+
+OpenAI clients are created at module import time — any test importing agent modules needs `OPENAI_API_KEY` set (any value works).
+
 ## Architecture boundaries
 
 - **MCP server** (`mcp_server/`) — serves Claude Desktop over MCP protocol (stdio transport). This is the ONLY place MCP is used.
