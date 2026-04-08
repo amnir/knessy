@@ -14,15 +14,14 @@ import logging
 
 from openai import OpenAI
 
-from agent.state import AgentState, ResearchResult, ResearchTask
+from agent.state import AgentState, ResearchResult, ResearchTask, check_budget
 from mcp_server import knesset_client
 
 log = logging.getLogger("agent")
 
-client = OpenAI()
+client = OpenAI(max_retries=3)
 MODEL = "gpt-4o"
 
-# Maps tool names to actual functions
 TOOL_REGISTRY = {
     "search_bills": knesset_client.search_bills,
     "get_bill": knesset_client.get_bill,
@@ -32,8 +31,8 @@ TOOL_REGISTRY = {
 }
 
 
-def _call_llm(system_prompt: str, user_prompt: str) -> str:
-    """Call OpenAI chat completion. Centralized for consistency."""
+def _call_llm(system_prompt: str, user_prompt: str) -> tuple[str, int]:
+    """Call OpenAI chat completion. Returns (content, total_tokens)."""
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
@@ -42,11 +41,14 @@ def _call_llm(system_prompt: str, user_prompt: str) -> str:
         ],
         temperature=0,
     )
-    return response.choices[0].message.content
+    tokens = response.usage.total_tokens if response.usage else 0
+    content = response.choices[0].message.content or ""
+    return content, tokens
 
 
 def planner(state: AgentState) -> dict:
     """Analyze the question and produce a list of research tasks."""
+    check_budget(state)
     question = state["question"]
     iteration = state.get("iteration", 0)
 
@@ -111,7 +113,7 @@ Respond ONLY with the JSON array."""
 
     user_prompt = f"Question: {question}{prior_context}"
 
-    raw = _call_llm(system_prompt, user_prompt)
+    raw, tokens_used = _call_llm(system_prompt, user_prompt)
 
     # Parse the JSON response
     # Strip markdown code fences if present
@@ -121,7 +123,15 @@ Respond ONLY with the JSON array."""
         cleaned = cleaned.rsplit("```", 1)[0]
 
     tasks = []
-    for item in json.loads(cleaned):
+    try:
+        # LLMs sometimes output Python None/True/False instead of JSON null/true/false
+        sanitized = cleaned.replace(": None", ": null").replace(": True", ": true").replace(": False", ": false")
+        parsed = json.loads(sanitized)
+    except json.JSONDecodeError:
+        log.error("Planner returned invalid JSON: %s", cleaned[:200])
+        parsed = []
+
+    for item in parsed:
         tasks.append(ResearchTask(
             tool=item["tool"],
             args=item.get("args", {}),
@@ -134,6 +144,7 @@ Respond ONLY with the JSON array."""
     return {
         "research_tasks": tasks,
         "iteration": iteration + 1,
+        "total_tokens": state.get("total_tokens", 0) + tokens_used,
         "messages": [{"role": "assistant", "content": f"Planning: identified {len(tasks)} research tasks for iteration {iteration + 1}"}],
     }
 
@@ -147,9 +158,7 @@ async def researcher(state: AgentState) -> dict:
     for task in tasks:
         try:
             if task.tool == "search_protocols":
-                # Agent-optimized path: skips query analysis (planner
-                # already structured the query) and reranking (judge
-                # handles relevance filtering post-retrieval).
+                # Direct retrieval — query analysis and reranking happen in other nodes.
                 from mcp_server.server import search_protocols_for_agent
                 result = await search_protocols_for_agent(**task.args)
             elif task.tool in TOOL_REGISTRY:
@@ -162,6 +171,7 @@ async def researcher(state: AgentState) -> dict:
             else:
                 result = f"Unknown tool: {task.tool}"
         except Exception as e:
+            log.error("Tool %s(%s) failed: %s", task.tool, task.args, e, exc_info=True)
             result = f"Error calling {task.tool}: {e}"
 
         new_results.append(ResearchResult(task=task, result=str(result)))
@@ -222,10 +232,11 @@ Rules:
 
     user_prompt = f"Question: {question}\n\nResearch data:\n{results_text}"
 
-    answer = _call_llm(system_prompt, user_prompt)
+    answer, tokens_used = _call_llm(system_prompt, user_prompt)
     log.info("Synthesizer: produced %d char answer", len(answer))
 
     return {
         "final_answer": answer,
+        "total_tokens": state.get("total_tokens", 0) + tokens_used,
         "messages": [{"role": "assistant", "content": answer}],
     }

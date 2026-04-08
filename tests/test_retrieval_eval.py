@@ -25,6 +25,7 @@ import asyncio
 import math
 
 import dotenv
+
 dotenv.load_dotenv()
 
 import pytest
@@ -65,9 +66,9 @@ def _extract_chunk_ids_from_response(response: str, query: str, top: int, filter
     search_protocols returns formatted text, not raw chunk IDs. We re-run
     the same query against OpenSearch to get the actual _id fields.
     """
-    from opensearchpy import OpenSearch
+
     from openai import OpenAI
-    import os
+    from opensearchpy import OpenSearch
 
     os_client = OpenSearch(hosts=[{"host": "localhost", "port": 9200}], use_ssl=False)
     openai_client = OpenAI()
@@ -205,8 +206,6 @@ def test_retrieval_eval(retrieval_case):
 @pytest.mark.retrieval
 def test_retrieval_summary():
     """Aggregate retrieval metrics across all cases. Run last for a summary."""
-    from openai import OpenAI
-    from opensearchpy import OpenSearch
 
     results = []
     for case in RETRIEVAL_CASES:

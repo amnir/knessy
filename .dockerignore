@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.git/
+.github/
+.claude/
+data/
+opensearch-data/
+*.egg-info/
+dist/
+.DS_Store
+LEARNINGS.md

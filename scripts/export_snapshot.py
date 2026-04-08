@@ -5,8 +5,6 @@ ready for upload to HuggingFace.
 """
 
 import subprocess
-import sys
-import time
 from pathlib import Path
 
 import httpx
@@ -66,7 +64,7 @@ def export():
 
     size_mb = OUTPUT_FILE.stat().st_size / (1024 * 1024)
     print(f"Exported snapshot to {OUTPUT_FILE} ({size_mb:.1f} MB)")
-    print(f"\nUpload to HuggingFace:")
+    print("\nUpload to HuggingFace:")
     print(f"  huggingface-cli upload amnir/knessy-data {OUTPUT_FILE} --repo-type dataset")
 
 

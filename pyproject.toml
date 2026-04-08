@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agent*", "mcp_server*", "ingest*", "ui*"]
+
+[project]
+name = "knessy"
+version = "0.1.0"
+description = "Agentic research assistant for Israeli Knesset data"
+requires-python = ">=3.11"
+dependencies = [
+    # MCP server
+    "mcp==1.26.0",
+    # Agent framework
+    "langgraph==1.0.7",
+    # LLM + Embeddings
+    "openai==2.16.0",
+    # Vector + full-text search
+    "opensearch-py==3.1.0",
+    # Environment
+    "python-dotenv==1.2.1",
+    # HTTP client
+    "httpx==0.28.1",
+    # UI
+    "gradio==6.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9",
+    "pytest-asyncio>=0.24,<1",
+    "ruff>=0.9,<1",
+    "mypy>=1.14,<2",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501", "E402"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = false
+warn_unused_configs = true
+ignore_missing_imports = true
+# Tighten gradually: disable checks for pre-existing issues
+disable_error_code = ["no-any-return", "var-annotated", "return-value", "union-attr", "arg-type", "dict-item", "assignment", "operator", "attr-defined"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

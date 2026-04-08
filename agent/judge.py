@@ -1,8 +1,7 @@
 """Combined CRAG grader + evaluator node (the "judge").
 
 Grades all retrieved chunks for relevance and decides sufficiency in a
-single gpt-4o-mini call. Replaces the separate grader and evaluator nodes
-to cut LLM calls per iteration.
+single gpt-4o-mini call.
 """
 
 import logging
@@ -13,9 +12,9 @@ from pydantic import BaseModel
 
 log = logging.getLogger("agent")
 
-from agent.state import AgentState, GradingResult, ResearchResult
+from agent.state import AgentState, GradingResult, ResearchResult, check_budget
 
-client = OpenAI()
+client = OpenAI(max_retries=3)
 JUDGE_MODEL = "gpt-4o-mini"
 RELEVANCE_THRESHOLD = 0.5
 MAX_ITERATIONS = 3
@@ -86,6 +85,8 @@ def judge(state: AgentState) -> dict:
         f"[Chunk {i}]\n{chunk[:800]}" for i, chunk in enumerate(all_chunks)
     )
 
+    check_budget(state)
+
     response = client.beta.chat.completions.parse(
         model=JUDGE_MODEL,
         messages=[
@@ -114,6 +115,8 @@ def judge(state: AgentState) -> dict:
         response_format=JudgeVerdict,
         temperature=0,
     )
+
+    judge_tokens = response.usage.total_tokens if response.usage else 0
 
     verdict = response.choices[0].message.parsed
     relevance = verdict.relevant
@@ -187,5 +190,6 @@ def judge(state: AgentState) -> dict:
         "reformulate": should_reformulate,
         "is_sufficient": is_sufficient,
         "eval_feedback": verdict.guidance,
+        "total_tokens": state.get("total_tokens", 0) + judge_tokens,
         "messages": [{"role": "assistant", "content": summary}],
     }

@@ -35,6 +35,21 @@ class GradingResult:
     relevance_ratio: float
 
 
+# Token budget — hard ceiling per agent run to prevent runaway costs.
+TOKEN_BUDGET = 200_000
+
+
+class TokenBudgetExceeded(Exception):
+    """Raised when the agent's token budget is exhausted."""
+
+
+def check_budget(state: dict) -> None:
+    """Raise if the token budget has been exhausted."""
+    used = state.get("total_tokens", 0)
+    if used >= TOKEN_BUDGET:
+        raise TokenBudgetExceeded(f"Token budget exhausted ({used:,}/{TOKEN_BUDGET:,})")
+
+
 class AgentState(TypedDict):
     """State flowing through the agent graph."""
 
@@ -48,3 +63,4 @@ class AgentState(TypedDict):
     eval_feedback: str
     iteration: int
     final_answer: str
+    total_tokens: int
